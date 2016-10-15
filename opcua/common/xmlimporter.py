@@ -4,6 +4,7 @@ format is the one from opc-ua specification
 """
 import logging
 import sys
+from copy import copy
 
 from opcua import ua
 from opcua.common import xmlparser
@@ -111,6 +112,7 @@ class XmlImporter(object):
         :returns: NodeId (str)
         """
         if nodeid.NamespaceIndex in self.namespaces:
+            nodeid = copy(nodeid)
             nodeid.NamespaceIndex = self.namespaces[nodeid.NamespaceIndex][0]
         return nodeid
 
