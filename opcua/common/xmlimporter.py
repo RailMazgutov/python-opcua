@@ -9,26 +9,12 @@ from opcua import ua
 from opcua.common import xmlparser
 
 
-def ua_type_to_python(val, uatype):
-    if uatype.startswith("Int") or uatype.startswith("UInt"):
-        return int(val)
-    elif uatype in ("String"):
-        return val
-    elif uatype in ("Bytes", "Bytes", "ByteString", "ByteArray"):
-        if sys.version_info.major > 2:
-            return bytes(val, 'utf8')
-        else:
-            return val
-    else:
-        raise Exception("uatype nopt handled", uatype, " for val ", val)
-
-
 def to_python(val, obj, attname):
     if isinstance(obj, ua.NodeId) and attname == "Identifier":
         raise RuntimeError("Error we should parse a NodeId here")
         return ua.NodeId.from_string(val)
     else:
-        return ua_type_to_python(val, obj.ua_types[attname])
+        return xmlparser.ua_type_to_python(val, obj.ua_types[attname])
 
 
 class XmlImporter(object):
@@ -98,6 +84,7 @@ class XmlImporter(object):
             else:
                 self.logger.warning("Not implemented node type: %s ", nodedata.nodetype)
                 continue
+            print("ADDED", node)
             nodes.append(node)
         return nodes
     
@@ -124,14 +111,13 @@ class XmlImporter(object):
         :returns: NodeId (str)
         """
         if nodeid.NamespaceIndex in self.namespaces:
-            print("Migrating", nodeid, " to ", end="")
             nodeid.NamespaceIndex = self.namespaces[nodeid.NamespaceIndex][0]
-            print(nodeid)
         return nodeid
 
     def _get_node(self, obj):
         node = ua.AddNodesItem()
         node.RequestedNewNodeId = self._migrate_ns(obj.nodeid)
+        print("\nADDING", node.RequestedNewNodeId, node.RequestedNewNodeId.Identifier)
         node.BrowseName = self._migrate_ns(obj.browsename)
         node.NodeClass = getattr(ua.NodeClass, obj.nodetype[2:])
         if obj.parent:
@@ -143,7 +129,9 @@ class XmlImporter(object):
         return node
 
     def to_nodeid(self, nodeid):
-        if not nodeid:
+        if isinstance(nodeid, ua.NodeId):
+            return nodeid
+        elif not nodeid:
             return ua.NodeId(ua.ObjectIds.String)
         elif "=" in nodeid:
             return ua.NodeId.from_string(nodeid)
@@ -166,6 +154,7 @@ class XmlImporter(object):
         node.NodeAttributes = attrs
         res = self.server.iserver.isession.add_nodes([node])
         self._add_refs(obj)
+        res[0].StatusCode.check()
         return res[0].AddedNodeId
 
     def add_object_type(self, obj):
@@ -178,6 +167,7 @@ class XmlImporter(object):
         node.NodeAttributes = attrs
         res = self.server.iserver.isession.add_nodes([node])
         self._add_refs(obj)
+        res[0].StatusCode.check()
         return res[0].AddedNodeId
 
     def add_variable(self, obj):
@@ -187,7 +177,7 @@ class XmlImporter(object):
             attrs.Description = ua.LocalizedText(obj.desc)
         attrs.DisplayName = ua.LocalizedText(obj.displayname)
         attrs.DataType = self.to_nodeid(obj.datatype)
-        # if obj.value and len(obj.value) == 1:
+        print("VAL", obj.value)
         if obj.value is not None:
             attrs.Value = self._add_variable_value(obj,)
         if obj.rank:
@@ -203,6 +193,7 @@ class XmlImporter(object):
         node.NodeAttributes = attrs
         res = self.server.iserver.isession.add_nodes([node])
         self._add_refs(obj)
+        res[0].StatusCode.check()
         return res[0].AddedNodeId
 
     def _make_ext_obj(sefl, obj):
@@ -230,7 +221,7 @@ class XmlImporter(object):
                             # we probably have a list
                             my_list = []
                             for vtype, v2 in v:
-                                my_list.append(ua_type_to_python(v2, vtype))
+                                my_list.append(xmlparser.ua_type_to_python(v2, vtype))
                             setattr(ext, attname, my_list)
                         else:
                             for attname2, v2 in v:
@@ -242,6 +233,7 @@ class XmlImporter(object):
         """
         Returns the value for a Variable based on the objects valuetype. 
         """
+        print("KKKKKKKKKKKKKKKKKK", obj, obj.valuetype)
         if obj.valuetype == 'ListOfExtensionObject':
             values = []
             for ext in obj.value:
@@ -250,7 +242,10 @@ class XmlImporter(object):
             return values
         elif obj.valuetype.startswith("ListOf"):
             vtype = obj.valuetype[6:]
-            return [getattr(ua, vtype)(v) for v in obj.value]
+            if hasattr(ua.ua_binary.Primitives, vtype):
+                return ua.Variant(obj.value, getattr(ua.VariantType, vtype))
+            else:
+                return [getattr(ua, vtype)(v) for v in obj.value]
         elif obj.valuetype == 'ExtensionObject':
             extobj = self._make_ext_obj(obj.value)
             return ua.Variant(extobj, getattr(ua.VariantType, obj.valuetype))
@@ -275,6 +270,7 @@ class XmlImporter(object):
         node.NodeAttributes = attrs
         res = self.server.iserver.isession.add_nodes([node])
         self._add_refs(obj)
+        res[0].StatusCode.check()
         return res[0].AddedNodeId
 
     def add_method(self, obj):
@@ -294,6 +290,7 @@ class XmlImporter(object):
         node.NodeAttributes = attrs
         res = self.server.iserver.isession.add_nodes([node])
         self._add_refs(obj)
+        res[0].StatusCode.check()
         return res[0].AddedNodeId
 
     def add_reference_type(self, obj):
@@ -311,6 +308,7 @@ class XmlImporter(object):
         node.NodeAttributes = attrs
         res = self.server.iserver.isession.add_nodes([node])
         self._add_refs(obj)
+        res[0].StatusCode.check()
         return res[0].AddedNodeId
 
     def add_datatype(self, obj):
@@ -324,6 +322,7 @@ class XmlImporter(object):
         node.NodeAttributes = attrs
         res = self.server.iserver.isession.add_nodes([node])
         self._add_refs(obj)
+        res[0].StatusCode.check()
         return res[0].AddedNodeId
 
     def _add_refs(self, obj):
@@ -340,7 +339,6 @@ class XmlImporter(object):
             refs.append(ref)
         self.server.iserver.isession.add_references(refs)
 
-    # FIX: wrong order of node sorting .. need to find out what is wrong
     def _sort_nodes_by_parentid(self, ndatas):
         """
         Sort the list of nodes according theire parent node in order to respect
@@ -385,4 +383,5 @@ class XmlImporter(object):
             # Remove inserted nodes from the list
             for ndata in pop_nodes:
                 _ndatas.pop(_ndatas.index(ndata))
+        print("SORTD", sorted_ndatas)
         return sorted_ndatas
